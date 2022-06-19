@@ -1,0 +1,87 @@
+--I
+--1.
+select sr.barcode, sr.id, cpdr.document_barcode, cpdr.started_at, cpdr.finished_at -- выбор полей
+from session_rpi sr right join customs_payment_data_request cpdr -- таблица sr присоединяется к таблице cpdr при наличии в cpdr сопоставимых значений
+on sr.id = cpdr.rpi_id -- совпадения ищутся по id 
+where cpdr.finished_at is null -- выводятся только записи, у которых дата окончания не заполнена
+order by started_at desc; -- сортировка результатов производится по дате начала (в порядке убывания)
+
+--2.
+select sr.barcode, sr.id, cpdr.document_barcode, cpdr.started_at, cpdr.finished_at, cpdr."data" -- выбор полей
+from session_rpi sr right join customs_payment_data_request cpdr -- таблица sr присоединяется к таблице cpdr при наличии в cpdr сопоставимых значений
+on sr.id = cpdr.rpi_id -- совпадения ищутся по id 
+where sr.barcode in ('LY195514329DE'); -- выводятся только записи с заданным значением баркода
+
+
+--3.
+select count(*) from sortcenter.customs_payment_data_request -- выбрать все записи из таблицы
+where finished_at is null -- выводятся только записи, у которых дата окончания не заполнена
+and started_at between now() - interval '7 days' and now() - interval '1 hours'; -- сравнение started_at с интервалом, отсчитываемым от текущей даты (не больше 7 дней до текущего момента и не меньше 1 часа до текущего момента)
+
+--II
+--1.
+select * from rpi_operation ro -- выбрать все записи из таблицы
+where ro.barcode in ('LY195514329DE') -- выводятся только записи с заданным значением баркода
+and operation_type like '%CUSTOMS%' -- выводятся только записи, у которых тип операции содержит в названии CUSTOMS
+order by operation_date desc; -- -- сортировка результатов производится по дате операции (в порядке убывания)
+
+--2.1. 
+select sr.barcode, sr.custom_code, sr.custom_provisional_code, sr.details from session_rpi sr -- выбрать записи из таблицы
+where id in ( --где id находится в перечне
+	select ro2.rpi_id from rpi_operation ro2 
+	where ro2.id in ( -- когда id соответствует критериям
+			select rpi_id from operation o -- выбрать id из таблицы
+    		where o.operation_type = 3 -- при условии что тип операции = 3
+    		and o.executed_at >= NOW() - INTERVAL '15 MINUTE' -- дата выполнения операции не более 15 минут назад 
+    		union -- объединить данные из двух запросов без дублирования
+    		select rpi_id from rpi_operation ro -- выбрать id из таблицы
+    		where ro.operation_type = 'RPI_EDITED' -- при условии что тип операции = RPI_EDITED
+    		and ro.operation_date >= NOW() - INTERVAL '15 MINUTE' -- дата выполнения операции не более 15 минут назад 
+    		) -- подзапрос для получения id 
+	)
+and (custom_code is null or custom_code in ( 9 ) or custom_provisional_code is null) -- применены условия к значениям
+and sr.imported != true -- значение не равно true
+and sr.exported != true -- значение не равно true
+and sr.details#>>'{customsDeclaration,content}' is not null -- поиск по значению поля внутри содержимого - поле внутри запроса в значении не пустое
+and sr.details#>>'{rpiAddressData,addressFrom,recipient}' = '2'; -- поиск по значению поля внутри содержимого - поле внутри запроса со значением = 2
+
+--2.2. 
+select sr.barcode, sr.custom_code, sr.custom_provisional_code, sr.details from session_rpi sr 
+where id in ( --где id находится в перечне
+	select ro2.rpi_id from rpi_operation ro2 
+	where ro2.id in ( --где id находится в перечне
+		select a.id from ( 
+			select ro.id, max(ro.operation_date) -- выводится операция для id  с максимальной датой (последняя операция)
+			from rpi_operation ro
+			where ro.operation_type in ('TRANSFER_TO_CUSTOMS_SIMPLE_EXPORT', 'CUSTOMS_PROCESSING_ERROR') -- выводятся значения где тип операции соответствует указанным типам
+			and ro.operation_date >= NOW() - INTERVAL '15 MINUTE' -- дата выполнения операции не более 15 минут назад 
+			group by ro.id -- группировка результата по id - для каждого уникального id выводится максимальная дата операции 
+			) a
+		)
+	and ro2.operation_type = 'TRANSFER_TO_CUSTOMS_SIMPLE_EXPORT'
+	)
+and (custom_code is null
+	or custom_code in (9)
+	or custom_provisional_code is null
+);
+
+--4.
+select sr.barcode, sr.custom_code, sr.custom_provisional_code, sr.details, ro2.operation_type, ro2.operation_date, ro2.details from session_rpi sr 
+inner join rpi_operation ro2 on sr.id = ro2.rpi_id 
+and ro2.operation_type like '%CUSTOM%'
+and sr.barcode in ('CB038967703RU', 'CB000042677RU');
+
+
+--6.
+select sr.barcode, sr.custom_code, sr.custom_provisional_code, sr.details, a.operation_type, a.operation_date, a.details from session_rpi sr
+inner join (
+	select ro2.rpi_id, ro2.operation_type, ro2.operation_date, ro2.details from rpi_operation ro2
+	where ro2.rpi_id in (
+		select ro.rpi_id from rpi_operation ro
+		where ro.operation_date between NOW() - INTERVAL '1 HOUR' and NOW() - INTERVAL '10 MINUTE'
+		and ro.operation_type = 'TRANSFER_TO_CUSTOMS_SIMPLE_EXPORT'
+		) 
+	and ro2.operation_type ='CUSTOMS_PROCESSING_ERROR'
+	) a 
+on sr.id = a.rpi_id;
+
